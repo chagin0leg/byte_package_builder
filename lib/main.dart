@@ -43,7 +43,8 @@ class ConfigService {
     config['__last_session__'] = rows
         .map((r) => {
               'value': r.valueController.text,
-              'description': r.descriptionController.text
+              'description': r.descriptionController.text,
+              'key': r.key, // Сохраняем ключ для идентификации
             })
         .toList();
     if (selectedPreset != null) {
@@ -72,7 +73,8 @@ class ConfigService {
     config['presets'][name] = rows
         .map((r) => {
               'value': r.valueController.text,
-              'description': r.descriptionController.text
+              'description': r.descriptionController.text,
+              'key': r.key,
             })
         .toList();
     await _write(config);
@@ -108,12 +110,14 @@ class RowData {
   final TextEditingController valueController;
   final TextEditingController descriptionController;
   final FocusNode valueFocusNode;
+  final String key; // Уникальный ключ для идентификации строки
   bool isValueInvalid = false;
 
   RowData({String value = '', String description = ''})
       : valueController = TextEditingController(text: value),
         descriptionController = TextEditingController(text: description),
-        valueFocusNode = FocusNode();
+        valueFocusNode = FocusNode(),
+        key = DateTime.now().microsecondsSinceEpoch.toString();
 
   void dispose() {
     valueController.dispose();
@@ -252,10 +256,26 @@ class _BytePackageBuilderPageState extends State<BytePackageBuilderPage> {
     _saveData(saveSession: true);
   }
 
-  void _deleteRow(int index) {
+  void _deleteRow(String rowKey) {
+    final index = _rows.indexWhere((row) => row.key == rowKey);
+    if (index >= 0) {
+      setState(() {
+        _rows[index].dispose();
+        _rows.removeAt(index);
+      });
+      _updateChecksum();
+      _saveData(saveSession: true);
+    }
+  }
+
+  // Функция для перетаскивания строк
+  void _reorderRows(int oldIndex, int newIndex) {
     setState(() {
-      _rows[index].dispose();
-      _rows.removeAt(index);
+      if (oldIndex < newIndex) {
+        newIndex -= 1;
+      }
+      final row = _rows.removeAt(oldIndex);
+      _rows.insert(newIndex, row);
     });
     _updateChecksum();
     _saveData(saveSession: true);
@@ -454,10 +474,11 @@ class _BytePackageBuilderPageState extends State<BytePackageBuilderPage> {
       body: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
-          spacing: 8,
           children: [
             _buildHeader(),
-            Expanded(child: _buildRowsList()),
+            Expanded(
+              child: _buildRowsListWithReorder(),
+            ),
             _buildControls(),
           ],
         ),
@@ -489,43 +510,107 @@ class _BytePackageBuilderPageState extends State<BytePackageBuilderPage> {
     );
   }
 
-  Widget _buildRowsList() {
-    return ListView(
+  Widget _buildRowsListWithReorder() {
+    return Column(
       children: [
+        // Фиксированная строка "Стартовый байт"
         _buildRow(
-            value: _startByte,
-            description: 'Стартовый байт',
-            isEditable: false),
-        ..._rows.asMap().entries.map((entry) {
-          int index = entry.key;
-          RowData row = entry.value;
-          return _buildRow(
-              data: row, isEditable: true, onDelete: () => _deleteRow(index));
-        }),
+          value: _startByte,
+          description: 'Стартовый байт',
+          isEditable: false,
+          key: const ValueKey('start_byte'),
+        ),
+
+        // Перетаскиваемый список строк
+        Expanded(
+          child: ReorderableListView.builder(
+            padding: const EdgeInsets.symmetric(vertical: 2.0),
+            onReorder: (oldIndex, newIndex) {
+              _reorderRows(oldIndex, newIndex);
+            },
+            itemCount: _rows.length,
+            itemBuilder: (context, index) {
+              final row = _rows[index];
+              return _buildDraggableRow(
+                data: row,
+                key: ValueKey(row.key),
+              );
+            },
+          ),
+        ),
+
+        // Фиксированная строка "Контрольная сумма"
         _buildRow(
-            value: _checksumValue,
-            description: 'Контрольная сумма',
-            isEditable: false,
-            controller: _checksumController),
+          value: _checksumValue,
+          description: 'Контрольная сумма',
+          isEditable: false,
+          controller: _checksumController,
+          key: const ValueKey('checksum'),
+        ),
       ],
     );
   }
 
+  Widget _buildDraggableRow({
+    required RowData data,
+    required Key key,
+  }) {
+    return ReorderableDragStartListener(
+      key: key,
+      index: _rows.indexWhere((row) => row.key == data.key),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2.0),
+        child: Row(
+          children: [
+            Expanded(
+              flex: 2,
+              child: TextField(
+                controller: data.valueController,
+                focusNode: data.valueFocusNode,
+                decoration: _inputDecoration.copyWith(
+                  filled: true,
+                  fillColor:
+                      data.isValueInvalid ? Colors.pink[100] : Colors.white,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              flex: 5,
+              child: TextField(
+                controller: data.descriptionController,
+                decoration: _inputDecoration,
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.only(left: 8.0),
+              child: IconButton(
+                icon: const Icon(Icons.delete),
+                onPressed: () => _deleteRow(data.key),
+              ),
+            ),
+            const Padding(
+              padding: EdgeInsets.only(right: 8.0),
+              child: Icon(Icons.drag_handle, color: Colors.transparent),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildRow({
-    RowData? data,
     String? value,
     String? description,
     required bool isEditable,
-    VoidCallback? onDelete,
     TextEditingController? controller,
+    required Key key,
   }) {
-    final valueController =
-        isEditable ? data!.valueController : TextEditingController(text: value);
-    final descController = isEditable
-        ? data!.descriptionController
-        : TextEditingController(text: description);
+    final valueController = TextEditingController(text: value);
+    final descController = TextEditingController(text: description);
 
     return Padding(
+      key: key,
       padding: const EdgeInsets.symmetric(vertical: 2.0),
       child: Row(
         spacing: 8,
@@ -535,15 +620,8 @@ class _BytePackageBuilderPageState extends State<BytePackageBuilderPage> {
             child: TextField(
               controller: controller ?? valueController,
               readOnly: !isEditable,
-              focusNode: isEditable ? data!.valueFocusNode : null,
-              decoration: isEditable
-                  ? _inputDecoration.copyWith(
-                      filled: true,
-                      fillColor: data!.isValueInvalid
-                          ? Colors.pink[100]
-                          : Colors.white,
-                    )
-                  : _readOnlyInputDecoration,
+              decoration:
+                  isEditable ? _inputDecoration : _readOnlyInputDecoration,
             ),
           ),
           Expanded(
@@ -554,15 +632,6 @@ class _BytePackageBuilderPageState extends State<BytePackageBuilderPage> {
               decoration:
                   isEditable ? _inputDecoration : _readOnlyInputDecoration,
             ),
-          ),
-          SizedBox(
-            width: 48,
-            child: isEditable
-                ? IconButton(
-                    icon: const Icon(Icons.delete),
-                    onPressed: onDelete,
-                  )
-                : null,
           ),
         ],
       ),
@@ -646,11 +715,14 @@ class _BytePackageBuilderPageState extends State<BytePackageBuilderPage> {
             autofocus: true,
           ),
           actions: [
-            for (bool i in [false, true])
-              TextButton(
-                child: Text(i ? 'ОК' : 'Отмена'),
-                onPressed: () => Navigator.of(cntx).pop(i ? ctrl.text : null),
-              ),
+            TextButton(
+              child: const Text('Отмена'),
+              onPressed: () => Navigator.of(cntx).pop(null),
+            ),
+            TextButton(
+              child: const Text('ОК'),
+              onPressed: () => Navigator.of(cntx).pop(ctrl.text),
+            ),
           ],
         );
       },
@@ -664,10 +736,14 @@ class _BytePackageBuilderPageState extends State<BytePackageBuilderPage> {
         title: Text(title),
         content: Text(content),
         actions: [
-          for (bool i in [false, true])
-            TextButton(
-                child: Text(i ? 'Да' : 'Нет'),
-                onPressed: () => Navigator.of(context).pop(i)),
+          TextButton(
+            child: const Text('Нет'),
+            onPressed: () => Navigator.of(context).pop(false),
+          ),
+          TextButton(
+            child: const Text('Да'),
+            onPressed: () => Navigator.of(context).pop(true),
+          ),
         ],
       ),
     );

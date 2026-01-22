@@ -117,7 +117,7 @@ jobs:
           EOF
           
           gh release create "v${{ steps.version.outputs.version }}-${{ steps.version.outputs.build }}" \
-            --title "Room Ranger ${{ steps.version.outputs.version }} (${{ steps.version.outputs.build }})" \
+            --title "Byte Package Builder ${{ steps.version.outputs.version }} (${{ steps.version.outputs.build }})" \
             --notes-file release_notes.md \
             --repo ${{ github.repository }}
         env:
